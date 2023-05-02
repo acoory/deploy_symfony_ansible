@@ -22,15 +22,17 @@ class ProductController extends AbstractController
         ]);
     }
 
-    #[Route('/api/product/{id}', name: 'app_product_show')]
+    #[Route('/api/products/{id}', name: 'app_product_show', methods: ['GET'])]
     public function find_by_id(ProductRepository $productRepository, $id): JsonResponse
     {
         $product = $productRepository->find($id);
 
         if (!$product) {
-            throw $this->createNotFoundException(
-                'No product found for id '.$id
-            );
+            // new jsonreponse with 404 status code and error fields
+            return new JsonResponse([
+                'error' => 'Product not found',
+            ], status: 404);
+
         }
 
         return $this->json([
@@ -48,9 +50,10 @@ class ProductController extends AbstractController
         $products = $productRepository->findAll();
 
         if (!$products) {
-            throw $this->createNotFoundException(
-                'No products found'
-            );
+            // return response appropiate for no products found (404)
+            return new JsonResponse([
+                'error' => 'Product not found',
+            ], status: 404);
         }
 
         $products = array_map(function ($product) {
@@ -66,56 +69,97 @@ class ProductController extends AbstractController
         return $this->json($products);
     }
 
-    #[Route('/api/products/create', name: 'app_api_product_create', methods: ['POST'])]
-        public function create(EntityManagerInterface $entityManager, Request $request): JsonResponse {
-            $data=json_decode($request->getContent(),true);
+    #[Route('/api/products', name: 'app_api_product_create', methods: ['POST'])]
+    public function create(EntityManagerInterface $entityManager, Request $request): JsonResponse {
+        $data=json_decode($request->getContent(),true);
 
-            if (!$data['name'] || !$data['price'] || !$data['description'] || !$data['photo']) {
-                // throw exception invalid argument
-                throw $this->createNotFoundException(
-                    'Missing arguments'
-                );
+        $requiredFields = ['name', 'price', 'description', 'photo'];
 
+        foreach ($requiredFields as $field) {
+            if (empty($data[$field])) {
+                return new JsonResponse([
+                    'error' => "Missing field: $field",
+                ], status: 400);
             }
-
-            $product = new Product();
-            $product->setName($data['name']);
-            $product->setPrice($data['price']);
-            $product->setDescription($data['description']);
-            $product->setPhoto($data['photo']);
-
-            $entityManager->persist($product);
-
-            $entityManager->flush();
-
-            return $this->json([
-                'message' => 'Product created successfully',
-            ]);
-
         }
 
-    #[Route('/api/products/update/{id}', name: 'app_api_product_update', methods: ['PUT'])]
+        if (!$this->is_string_and_not_empty($data['description']) || !$this->is_string_and_not_empty($data['name']) || !$this->is_string_and_not_empty($data['photo'])) {
+            return new JsonResponse([
+                'error' => "Invalid argument: description, name and photo should be non-empty strings",
+            ], status: 400);
+        }
+
+        if (!$this->is_int_and_not_empty($data['price'])) {
+            return new JsonResponse([
+                'error' => "Invalid argument: price should be a non-empty double",
+            ], status: 400);
+        }
+
+        $product = new Product();
+        $product->setName($data['name']);
+        $product->setPrice($data['price']);
+        $product->setDescription($data['description']);
+        $product->setPhoto($data['photo']);
+
+        $entityManager->persist($product);
+        $entityManager->flush();
+
+        return new JsonResponse("Product created successfully", 201);
+    }
+
+    function is_string_and_not_empty($field): bool {
+        return is_string($field) && !empty($field);
+    }
+
+    function is_int_and_not_empty($field): bool {
+        return is_double($field) && !empty($field);
+    }
+
+
+
+
+
+    #[Route('/api/products/{id}', name: 'app_api_product_update', methods: ['PUT'])]
         public function update(EntityManagerInterface $entityManager, Request $request, $id): JsonResponse {
             $data=json_decode($request->getContent(),true);
 
             $product = $entityManager->getRepository(Product::class)->find($id);
             if (!$product) {
-                throw $this->createNotFoundException(
-                    'No product found for id '.$id
-                );
+               return new JsonResponse ([ 'error' => 'Product not found'], 404);
             }
 
-            if (!$data['name'] || !$data['price'] || !$data['description'] || !$data['photo']) {
-                // throw exception invalid argument
-                throw $this->createNotFoundException(
-                    'Missing arguments'
-                );
 
+        // verify format of data if present
+            if (isset($data['name']) && !$this->is_string_and_not_empty($data['name'])) {
+                return new JsonResponse([
+                    'error' => "Invalid argument: name should be a non-empty string",
+                ], status: 400);
             }
-            $product->setName($data['name']);
-            $product->setPrice($data['price']);
-            $product->setDescription($data['description']);
-            $product->setPhoto($data['photo']);
+            if (isset($data['price']) && !$this->is_int_and_not_empty($data['price'])) {
+                return new JsonResponse([
+                    'error' => "Invalid argument: price should be a non-empty double",
+                ], status: 400);
+            }
+            if (isset($data['description']) && !$this->is_string_and_not_empty($data['description'])) {
+                return new JsonResponse([
+                    'error' => "Invalid argument: description should be a non-empty string",
+                ], status: 400);
+            }
+            if (isset($data['photo']) && !$this->is_string_and_not_empty($data['photo'])) {
+                return new JsonResponse([
+                    'error' => "Invalid argument: photo should be a non-empty string",
+                ], status: 400);
+            }
+
+
+        // update product with data from request body (if present) and save to database
+            $product->setName($data['name'] ?? $product->getName());
+            $product->setPrice($data['price'] ?? $product->getPrice());
+            $product->setDescription($data['description'] ?? $product->getDescription());
+            $product->setPhoto($data['photo'] ?? $product->getPhoto());
+
+
+
 
             $entityManager->persist($product);
 
@@ -126,14 +170,12 @@ class ProductController extends AbstractController
             ]);
         }
 
-    #[Route('/api/products/delete/{id}', name: 'app_api_product_delete', methods: ['DELETE'])]
+    #[Route('/api/products/{id}', name: 'app_api_product_delete', methods: ['DELETE'])]
         public function delete(EntityManagerInterface $entityManager, $id): JsonResponse {
             $product = $entityManager->getRepository(Product::class)->find($id);
 
             if (!$product) {
-                throw $this->createNotFoundException(
-                    'No product found for id '.$id
-                );
+               return new JsonResponse ([ 'error' => 'Product not found'], 404);
             }
 
             $entityManager->remove($product);
@@ -144,8 +186,5 @@ class ProductController extends AbstractController
                 'message' => 'Product deleted successfully',
             ]);
         }
-
-
-
 
 }

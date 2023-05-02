@@ -2,6 +2,7 @@
 
 namespace App\Controller;
 
+use App\Entity\Panier;
 use App\Repository\UserRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -10,11 +11,12 @@ use Symfony\Component\Routing\Annotation\Route;
 use App\Entity\User;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\Security\Http\Attribute\CurrentUser;
 use Symfony\Component\Security\Http\Authentication\AuthenticationUtils;
 use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface;
-use Symfony\Component\Validator\Validator\ValidatorInterface;
+use Symfony\Component\Validator\Constraints\Json;
 
 class ApiController extends AbstractController
 
@@ -54,28 +56,36 @@ class ApiController extends AbstractController
     }
 
   
-    #[Route('/api/users/create', name: 'app_api_user_create', methods: ['POST'])]
-    public function create(EntityManagerInterface $entityManager, Request $request, UserPasswordHasherInterface $userPasswordHasher, ValidatorInterface $validato): JsonResponse
+    #[Route('/api/users', name: 'app_api_user_create', methods: ['POST'])]
+    public function create(EntityManagerInterface $entityManager, Request $request, UserPasswordHasherInterface $userPasswordHasher): JsonResponse
     {
-        $data = json_decode($request->getContent(), true);
+        $data=json_decode($request->getContent(),true);
 
-        $user = new User();
-        $user->setEmail($data['email']);
-        $user->setFirstname($data['firstname']);
-        $user->setLastname($data['lastname']);
-        $user->setPassword($userPasswordHasher->hashPassword($user, $data['password']));
-        $user->setRoles(['ROLE_USER']);
-
-        $errors = $validato->validate($user);
-
-        if (count($errors) > 0) {
-            return $this->json([
-                'message' => 'Invalid data',
-                'errors' => (string) $errors,
-            ], 400);
+        // verify if the user already exists with the same email
+        $user = $entityManager->getRepository(User::class)->findOneBy(['email' => $data['email']]);
+        if ($user) {
+           return new JsonResponse("User already exists", 409);
         }
 
+        $user = new User();
+        $hashedPassword = $userPasswordHasher->hashPassword($user, $data['password']);
+        $user->setEmail($data['email']);
+        $user->setPassword($hashedPassword);
+        $user->setFirstname($data['firstname']);
+        $user->setLastname($data['lastname']);
+        $user->setRoles(['ROLE_USER']);
+
+        // create a new panier for the user
+        $panier = new Panier();
+        $panier->setUser($user);
+        $panier->setTotalPrice(0);
+        $panier->setCreationDate(new \DateTime());
+        $panier->setProducts([]);
+
+
+        $entityManager->persist($panier);
         $entityManager->persist($user);
+
         $entityManager->flush();
 
         return $this->json([
@@ -89,22 +99,29 @@ class ApiController extends AbstractController
         ]);
     }
 
-    #[Route('/api/users/{id}', name: 'app_api_user', methods: ['PUT'])]
+    #[Route('/api/users', name: 'app_api_user', methods: ['PUT'])]
 
-    public function update(#[CurrentUser] ?User $user, EntityManagerInterface $entityManager, Request $request, AuthenticationUtils $authUtils, $id): JsonResponse
+    public function update(#[CurrentUser] ?User $user, EntityManagerInterface $entityManager, Request $request): JsonResponse
     {
         if (!$user) {
             return $this->json([
                 'message' => 'You are not allowed to update this user',
             ], 401);
         }
-
-        $data = json_decode($request->getContent(), true);
-
-        $user = $entityManager->getRepository(User::class)->find($user->getId());
-
-        $user->setFirstname($data['firstname']);
-        $user->setLastname($data['lastname']);
+       // update user data if fields are not empty
+        $data=json_decode($request->getContent(),true);
+        if(isset($data['email']) && !empty($data['email'])){
+            $user->setEmail($data['email']);
+        }
+        if(isset($data['firstname']) && !empty($data['firstname'])){
+            $user->setFirstname($data['firstname']);
+        }
+        if(isset($data['lastname']) && !empty($data['lastname'])){
+            $user->setLastname($data['lastname']);
+        }
+        if(isset($data['password']) && !empty($data['password'])){
+            $user->setPassword($data['password']);
+        }
 
         $entityManager->persist($user);
         $entityManager->flush();
@@ -133,8 +150,18 @@ class ApiController extends AbstractController
     }
 
     #[Route('/api/users/{id}', name: 'app_api_user_show', methods: ['GET'])]
-    public function show(User $user): JsonResponse
+    public function show(User $user, $id, UserRepository $userRepository): JsonResponse
     {
+
+        $is_user = $userRepository->find($id);
+
+        if (!$is_user) {
+            return new JsonResponse([
+                'error' => 'User not found'
+            ], 404);
+
+
+        }
         return $this->json([
             'message' => 'User details',
             'user' => [
